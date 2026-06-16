@@ -56,8 +56,9 @@
         removePillsByType(container, 'brand');
         removePillsByType(container, 'individual');
       });
-      document.querySelectorAll('.order-products-table-name').forEach(nameBlock => {
-        const totalDiv = nameBlock.parentNode?.querySelector('.promo-pill-total');
+      document.querySelectorAll('.order-products-table-name, .subrow-name-field').forEach(nameBlock => {
+        const totalDiv = nameBlock.parentNode?.parentNode?.querySelector('.promo-pill-total') ||
+                         nameBlock.closest('tr')?.querySelector('.promo-pill-total');
         if (totalDiv) totalDiv.remove();
       });
     };
@@ -82,6 +83,25 @@
     const getBrandName = (title) => {
       for (let brand of brandList) if (brand.pattern.test(title)) return brand.name;
       return null;
+    };
+
+    const getItemId = (row) => {
+      const idCell = row.querySelector('.good-id-cell');
+      if (idCell) return idCell.textContent.trim();
+      const nameBlock = row.querySelector('.order-products-table-name, .subrow-name-field');
+      return nameBlock ? nameBlock.textContent.trim() : null;
+    };
+
+    const getItemName = (row) => {
+      const nameBlock = row.querySelector('.order-products-table-name, .subrow-name-field');
+      return nameBlock ? nameBlock.textContent.trim() : null;
+    };
+
+    const getSumFromRow = (row) => {
+      const tds = row.querySelectorAll('td');
+      if (tds.length < 6) return null;
+      const sumCell = tds[5];
+      return sumCell ? sumCell.innerText.trim() : null;
     };
 
     const createPillContainer = (nameBlock) => {
@@ -125,8 +145,8 @@
       return pill;
     };
 
-    const createIndividualInput = (nameBlock, row) => {
-      if (nameBlock.querySelector('.promo-tool-individual-input')) return;
+    const createIndividualInput = (row, nameBlock) => {
+      if (row.querySelector('.promo-tool-individual-input')) return;
       const inputDiv = document.createElement('div');
       inputDiv.className = 'promo-tool-individual-input';
       inputDiv.style.cssText = "margin-top:4px;";
@@ -163,18 +183,25 @@
         checkboxes: [],
         individualValues: []
       };
+      // Собираем состояние только с чекбоксов (которые только на строках-заменах)
       document.querySelectorAll('.promo-tool-checkbox').forEach(cb => {
-        const nameBlock = cb.closest('.order-products-table-name');
-        if (!nameBlock) return;
-        const row = nameBlock.closest('tr');
+        const row = cb.closest('tr');
         if (!row) return;
         const tds = row.querySelectorAll('td');
         if (tds.length < 6) return;
-        const name = nameBlock.textContent.trim();
+        const itemId = getItemId(row);
+        if (!itemId) return;
         const sum = tds[5].innerText.trim();
-        const individualInput = nameBlock.parentNode?.querySelector('.promo-tool-individual-input input');
-        state.checkboxes.push({ name, sum, checked: cb.checked, hasPromo: cb.dataset.promo === '1' });
-        state.individualValues.push({ name, value: individualInput ? individualInput.value : '' });
+        const individualInput = row.querySelector('.promo-tool-individual-input input');
+        state.checkboxes.push({
+          id: itemId,
+          checked: cb.checked,
+          sum: sum
+        });
+        state.individualValues.push({
+          id: itemId,
+          value: individualInput ? individualInput.value : ''
+        });
       });
       sessionStorage.setItem('ozonCashbackState_' + window.location.pathname, JSON.stringify(state));
     };
@@ -184,7 +211,7 @@
       if (!saved) return;
       try {
         const state = JSON.parse(saved);
-        activeTab = state.activeTab;
+        activeTab = state.activeTab || 'premium';
         commonPercentage = state.commonPercentage || 0;
         const premiumInput = document.querySelector('.premium-panel-input');
         if (premiumInput) premiumInput.value = state.premiumPercent || '';
@@ -210,16 +237,25 @@
         };
         switchTab(activeTab);
 
+        // Восстанавливаем чекбоксы по идентификатору (артикулу)
         state.checkboxes.forEach(savedCb => {
-          const cb = [...document.querySelectorAll('.promo-tool-checkbox')].find(c => c.closest('.order-products-table-name')?.textContent.trim() === savedCb.name);
+          const cb = [...document.querySelectorAll('.promo-tool-checkbox')].find(c => {
+            const row = c.closest('tr');
+            return row && getItemId(row) === savedCb.id;
+          });
           if (cb) {
             cb.checked = savedCb.checked;
             const changeEvent = new Event('change', { bubbles: true });
             cb.dispatchEvent(changeEvent);
           }
         });
+
+        // Восстанавливаем индивидуальные инпуты
         state.individualValues.forEach(savedInd => {
-          const input = [...document.querySelectorAll('.promo-tool-individual-input input')].find(inp => inp.closest('.order-products-table-name')?.textContent.trim() === savedInd.name);
+          const input = [...document.querySelectorAll('.promo-tool-individual-input input')].find(inp => {
+            const row = inp.closest('tr');
+            return row && getItemId(row) === savedInd.id;
+          });
           if (input) input.value = savedInd.value;
         });
       } catch (e) { console.error('Restore error', e); }
@@ -261,9 +297,9 @@
       if (total === null) {
         let totalOrderBonuses = 0;
         document.querySelectorAll('.promo-tool-checkbox:checked').forEach(cb => {
-          const nameBlock = cb.closest('.order-products-table-name');
-          if (!nameBlock) return;
-          const totalPillDiv = nameBlock.parentNode?.querySelector('.promo-pill-total');
+          const row = cb.closest('tr');
+          if (!row) return;
+          const totalPillDiv = row.querySelector('.promo-pill-total');
           if (totalPillDiv) {
             const match = totalPillDiv.textContent.match(/Всего ([\d.]+) бонусов/);
             if (match) totalOrderBonuses += parseFloat(match[1]);
@@ -317,13 +353,7 @@
 
     const resetAllCalculations = () => {
       removeAllPills();
-      document.querySelectorAll('.order-products-table-name').forEach(nameBlock => {
-        const individualInputDiv = nameBlock.parentNode?.querySelector('.promo-tool-individual-input');
-        if (individualInputDiv) {
-          const input = individualInputDiv.querySelector('input');
-          if (input) input.value = '';
-        }
-      });
+      document.querySelectorAll('.promo-tool-individual-input input').forEach(input => input.value = '');
       const premiumInput = document.querySelector('.premium-panel-input');
       if (premiumInput) premiumInput.value = '';
       const basicInput = document.querySelector('.basic-panel-input');
@@ -386,9 +416,7 @@
 
       const checkedBoxes = [...document.querySelectorAll('.promo-tool-checkbox:checked')];
       for (const cb of checkedBoxes) {
-        const nameBlock = cb.closest('.order-products-table-name');
-        if (!nameBlock) continue;
-        const row = nameBlock.closest('tr');
+        const row = cb.closest('tr');
         if (!row) continue;
         const tds = row.querySelectorAll('td');
         if (tds.length < 6) continue;
@@ -397,11 +425,16 @@
         const sumText = sumCell.innerText.trim();
         const sumVal = getNumberFromSum(sumText);
         const { hasPromo } = detectPromo(tds);
+
+        // Находим блок с названием (может быть в .order-products-table-name или .subrow-name-field)
+        const nameBlock = row.querySelector('.order-products-table-name, .subrow-name-field');
+        if (!nameBlock) continue;
+
         const container = createPillContainer(nameBlock);
         removePillsByType(container, 'common');
         removePillsByType(container, 'brand');
         removePillsByType(container, 'individual');
-        const oldTotal = nameBlock.parentNode?.querySelector('.promo-pill-total');
+        const oldTotal = row.querySelector('.promo-pill-total');
         if (oldTotal) oldTotal.remove();
 
         let commonValue = 0, brandValue = 0, individualValue = 0;
@@ -413,14 +446,12 @@
             if (brandName) brandValue = sumVal * 20 / 100;
           }
         }
-        const individualInputDiv = nameBlock.parentNode?.querySelector('.promo-tool-individual-input');
-        if (individualInputDiv) {
-          const indInput = individualInputDiv.querySelector('input');
-          if (indInput) {
-            let indPercent = parseFloat(indInput.value);
-            if (!isNaN(indPercent) && indPercent !== 0) individualValue = sumVal * indPercent / 100;
-          }
+        const individualInput = row.querySelector('.promo-tool-individual-input input');
+        if (individualInput) {
+          let indPercent = parseFloat(individualInput.value);
+          if (!isNaN(indPercent) && indPercent !== 0) individualValue = sumVal * indPercent / 100;
         }
+
         const totalValue = commonValue + brandValue + individualValue;
         if (totalValue === 0) continue;
         const totalFormatted = totalValue.toFixed(2);
@@ -451,11 +482,12 @@
         }
         await sleep(delay);
       }
+
       let totalOrderBonuses = 0;
       document.querySelectorAll('.promo-tool-checkbox:checked').forEach(cb => {
-        const nameBlock = cb.closest('.order-products-table-name');
-        if (!nameBlock) return;
-        const totalPillDiv = nameBlock.parentNode?.querySelector('.promo-pill-total');
+        const row = cb.closest('tr');
+        if (!row) return;
+        const totalPillDiv = row.querySelector('.promo-pill-total');
         if (totalPillDiv) {
           const match = totalPillDiv.textContent.match(/Всего ([\d.]+) бонусов/);
           if (match) totalOrderBonuses += parseFloat(match[1]);
@@ -478,54 +510,136 @@
       const table = rows[0]?.closest("table");
       if (table) table.style.borderCollapse = 'collapse';
 
-      for (const row of rows) {
-        const tds = row.querySelectorAll("td");
-        if (tds.length < 6) continue;
-        const nameBlock = tds[0].querySelector(".order-products-table-name");
-        if (!nameBlock) continue;
-        if (nameBlock.querySelector(".promo-tool-checkbox")) continue;
-        const name = nameBlock.textContent.trim();
-        if (!name || name.toLowerCase().includes("пакет")) continue;
-        const { hasPromo } = detectPromo(tds);
-        const sum = (tds[5].innerText || "").trim();
-        const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
-        row.style.removeProperty('background');
-        row.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
-        row.style.setProperty('box-shadow', 'none', 'important');
-        row.style.setProperty('border-top', 'none', 'important');
-        row.style.setProperty('border-right', 'none', 'important');
-        row.style.setProperty('border-bottom', 'none', 'important');
-        nameBlock.style.display = "flex";
-        nameBlock.style.alignItems = "center";
-        nameBlock.style.gap = "6px";
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.className = "promo-tool-checkbox";
-        cb.checked = !hasPromo;
-        cb.dataset.name = name;
-        cb.dataset.sum = sum;
-        cb.dataset.promo = hasPromo ? "1" : "0";
-        nameBlock.prepend(cb);
-        if (cb.checked) createIndividualInput(nameBlock, row);
-        else createPillContainer(nameBlock);
+      // Проходим по строкам с учётом замен
+      let i = 0;
+      while (i < rows.length) {
+        const row = rows[i];
+        const tds = row.querySelectorAll('td');
+        if (tds.length < 6) { i++; continue; }
+
+        // Проверяем, является ли текущая строка заменой (содержит subrow и replacement-ending-line)
+        const isSubrow = row.querySelector('._table-subrow-cell_') && row.querySelector('.replacement-ending-line');
+        // Проверяем, является ли строка исходником (содержит replaced-row и иконку замены)
+        const isOriginal = row.querySelector('.replaced-row') && row.querySelector('.item-replaced-icon');
+
+        let rowToProcess = row;
+        let originalRow = null;
+
+        if (isSubrow) {
+          // Это строка-замена. Следующая строка должна быть исходником
+          if (i + 1 < rows.length) {
+            const nextRow = rows[i + 1];
+            const nextIsOriginal = nextRow.querySelector('.replaced-row') && nextRow.querySelector('.item-replaced-icon');
+            if (nextIsOriginal) {
+              // Нашли пару: замена (текущая) и исходник (следующая)
+              originalRow = nextRow;
+              // Обрабатываем только строку-замену (создаём чекбокс, инпут)
+              const nameBlock = row.querySelector('.subrow-name-field');
+              if (nameBlock) {
+                // Проверяем, есть ли уже чекбокс
+                if (!row.querySelector('.promo-tool-checkbox')) {
+                  const { hasPromo } = detectPromo(tds);
+                  const sum = (tds[5].innerText || "").trim();
+                  const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
+                  // Применяем границу к строке-замене
+                  row.style.removeProperty('background');
+                  row.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
+                  row.style.setProperty('box-shadow', 'none', 'important');
+                  row.style.setProperty('border-top', 'none', 'important');
+                  row.style.setProperty('border-right', 'none', 'important');
+                  row.style.setProperty('border-bottom', 'none', 'important');
+                  // Применяем ту же границу к строке-исходнику
+                  if (originalRow) {
+                    originalRow.style.removeProperty('background');
+                    originalRow.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
+                    originalRow.style.setProperty('box-shadow', 'none', 'important');
+                    originalRow.style.setProperty('border-top', 'none', 'important');
+                    originalRow.style.setProperty('border-right', 'none', 'important');
+                    originalRow.style.setProperty('border-bottom', 'none', 'important');
+                  }
+
+                  // Создаём чекбокс
+                  const cb = document.createElement("input");
+                  cb.type = "checkbox";
+                  cb.className = "promo-tool-checkbox";
+                  cb.checked = !hasPromo;
+                  const itemId = getItemId(row);
+                  cb.dataset.id = itemId || '';
+                  cb.dataset.name = nameBlock.textContent.trim();
+                  cb.dataset.sum = sum;
+                  cb.dataset.promo = hasPromo ? "1" : "0";
+                  // Вставляем чекбокс перед названием
+                  nameBlock.style.display = "flex";
+                  nameBlock.style.alignItems = "center";
+                  nameBlock.style.gap = "6px";
+                  nameBlock.prepend(cb);
+
+                  // Создаём индивидуальный инпут
+                  createIndividualInput(row, nameBlock);
+                }
+              }
+              // Пропускаем исходник на следующей итерации
+              i += 2;
+              continue;
+            }
+          }
+        }
+
+        // Если не нашли пару, обрабатываем как обычный товар
+        const nameBlock = row.querySelector('.order-products-table-name');
+        if (nameBlock && !row.querySelector('.promo-tool-checkbox') && !isOriginal) {
+          const name = nameBlock.textContent.trim();
+          if (!name || name.toLowerCase().includes("пакет")) { i++; continue; }
+          const { hasPromo } = detectPromo(tds);
+          const sum = (tds[5].innerText || "").trim();
+          const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
+          row.style.removeProperty('background');
+          row.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
+          row.style.setProperty('box-shadow', 'none', 'important');
+          row.style.setProperty('border-top', 'none', 'important');
+          row.style.setProperty('border-right', 'none', 'important');
+          row.style.setProperty('border-bottom', 'none', 'important');
+          nameBlock.style.display = "flex";
+          nameBlock.style.alignItems = "center";
+          nameBlock.style.gap = "6px";
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.className = "promo-tool-checkbox";
+          cb.checked = !hasPromo;
+          const itemId = getItemId(row);
+          cb.dataset.id = itemId || '';
+          cb.dataset.name = name;
+          cb.dataset.sum = sum;
+          cb.dataset.promo = hasPromo ? "1" : "0";
+          nameBlock.prepend(cb);
+          createIndividualInput(row, nameBlock);
+        }
+        i++;
       }
 
+      // Слушатель изменений чекбоксов
       document.body.addEventListener('change', e => {
         if (e.target.classList?.contains('promo-tool-checkbox')) {
-          const nameBlock = e.target.closest('.order-products-table-name');
-          if (!nameBlock) return;
+          const row = e.target.closest('tr');
+          if (!row) return;
           if (e.target.checked) {
-            if (!nameBlock.parentNode?.querySelector('.promo-tool-individual-input')) createIndividualInput(nameBlock, nameBlock.closest('tr'));
+            // Если чекбокс включен, убедимся, что индивидуальный инпут есть
+            if (!row.querySelector('.promo-tool-individual-input')) {
+              const nameBlock = row.querySelector('.order-products-table-name, .subrow-name-field');
+              if (nameBlock) createIndividualInput(row, nameBlock);
+            }
+            // Удаляем старые пиллы
             const container = createPillContainer(nameBlock);
             removePillsByType(container, 'common');
             removePillsByType(container, 'brand');
             removePillsByType(container, 'individual');
-            const oldTotal = nameBlock.parentNode?.querySelector('.promo-pill-total');
+            const oldTotal = row.querySelector('.promo-pill-total');
             if (oldTotal) oldTotal.remove();
           } else {
-            const individualDiv = nameBlock.parentNode?.querySelector('.promo-tool-individual-input');
-            if (individualDiv) individualDiv.remove();
-            const container = nameBlock.parentNode?.querySelector('.promo-pills-container');
+            // Если чекбокс выключен, удаляем индивидуальный инпут и пиллы
+            const indInput = row.querySelector('.promo-tool-individual-input');
+            if (indInput) indInput.remove();
+            const container = row.querySelector('.promo-pills-container');
             if (container) container.remove();
           }
           resetAllCalculationsOnCheckboxChange();
@@ -632,7 +746,7 @@
         helpPanel.style.display = 'none';
         helpContent = document.createElement('div');
         helpContent.className = 'help-panel-content';
-        helpContent.innerHTML = '<h3>🧮 Как пользоваться калькулятором?</h3><p><em>Зеленым выделены товары, к которым применился промокод, красным — без промокода</em></p><p><strong>1.</strong> Выбери вкладку Премиум / Базовый в зависимости от наличия подписки у клиента.</p><p><strong>2.</strong> Проверь категории с кешбэком клиента</p><p><strong>3.</strong> Выбери товары, по которым будем считать кешбэк:</p><div class="quote">• товары без промокода — отмечены автоматически<br>• товары с промокодом — если на них действуют категории, распространяющиеся на товары по акции</div><p><strong>4.</strong> Введи процент кешбэка Премиум / Базовый в поле рядом с вкладками:</p><div class="quote">• Премиум — 5% для заказов Экспресс, Доставка и Аптека, 10% для заказов Косметик<br>• Базовый — процент в категории. Если не выбран, оставь поле пустым</div><p><strong>5.</strong> У товаров, на которые действуют категории, укажи процент кешбэка за категорию</p><p><strong>6.</strong> Нажми «Рассчитать кешбэк» — появятся детализация по бонусам у каждого товара и общая сумма бонусов за заказ</p><p><strong>7.</strong> Если после расчета нужно что-то исправить, внеси изменения и нажми «Рассчитать кешбэк» — расчеты обновятся</p><hr><p><strong>Примечание:</strong></p><p>По Премиуму есть дополнительный кешбэк:<br> 🥗 20% за готовую еду и выпечку собственного производства (СП)<br> 🎁 20% за товары брендов Premiere of Taste, La Fresh, Восточный гость, EatMeat, Inspirato Momento и М Кухня<br> ☕ 50% за чай и кофе</p><p>✔️ За товары брендов калькулятор сам посчитает и отобразит дополнительный кешбэк<br> ✖️ За СП и чай / кофе нужно посчитать самостоятельно:</p><div class="quote">• Проверь, есть ли в заказе товары СП — у таких товаров название без обозначения бренда. Например:<br> <em>– Фунчоза с овощами по-корейски 150г</em><br> <em>– Сочник с творогом 110г</em><br> <em>– Кофе Капучино большой зерновой 300мл</em><br><br> • Если такие товары есть в заказе — укажи 20% (готовая еда и выпечка) или 50% (чай и кофе) в поле для индивидуального кешбэка</div>';
+        helpContent.innerHTML = '<h3>🧮 Как пользоваться калькулятором?</h3><p><em>Зеленым выделены товары, к которым применился промокод, красным — без промокода.</em></p><p><strong>1.</strong> Выбери вкладку Премиум / Базовый в зависимости от наличия подписки у клиента.</p><p><strong>2.</strong> Проверь категории с кешбэком клиента</p><p><strong>3.</strong> Выбери товары, по которым будем считать кешбэк:</p><div class="quote">• товары без промокода — отмечены автоматически<br>• товары с промокодом — если на них действуют категории, распространяющиеся на товары по акции</div><p><strong>4.</strong> Введи процент кешбэка Премиум / Базовый в поле рядом с вкладками:</p><div class="quote">• Премиум — 5% для заказов Экспресс, Доставка и Аптека, 10% для заказов Косметик<br>• Базовый — процент в категории. Если не выбран, оставь поле пустым</div><p><strong>5.</strong> У товаров, на которые действуют категории, укажи процент кешбэка за категорию</p><p><strong>6.</strong> Нажми «Рассчитать кешбэк» — появятся детализация по бонусам у каждого товара и общая сумма бонусов за заказ</p><p><strong>7.</strong> Если после расчета нужно что-то исправить, внеси изменения и нажми «Рассчитать кешбэк» — расчеты обновятся</p><hr><p><strong>Примечание:</strong></p><p>По Премиуму есть дополнительный кешбэк:<br> 🥗 20% за готовую еду и выпечку собственного производства (СП)<br> 🎁 20% за товары брендов Premiere of Taste, La Fresh, Восточный гость, EatMeat, Inspirato Momento и М Кухня<br> ☕ 50% за чай и кофе</p><p>✔️ За товары брендов калькулятор сам посчитает и отобразит дополнительный кешбэк<br> ✖️ За СП и чай / кофе нужно посчитать самостоятельно:</p><div class="quote">• Проверь, есть ли в заказе товары СП — у таких товаров название без обозначения бренда. Например:<br> <em>– Фунчоза с овощами по-корейски 150г</em><br> <em>– Сочник с творогом 110г</em><br> <em>– Кофе Капучино большой зерновой 300мл</em><br><br> • Если такие товары есть в заказе — укажи 20% (готовая еда и выпечка) или 50% (чай и кофе) в поле для индивидуального кешбэка</div>';
         helpPanel.appendChild(helpContent);
         wrap.appendChild(controlsRow);
         wrap.appendChild(helpPanel);
@@ -661,7 +775,7 @@
       }
       restoreState();
       saveState();
-      bar("✓ Калькулятор загружен");
+      bar("Готово");
     };
 
     init();
