@@ -1,7 +1,6 @@
 'use strict';
 
 (() => {
-  // ----- КАЛЬКУЛЯТОР (вся логика) -----
   const runCalculator = () => {
     if (document.getElementById("promo-tool-calc-wrap")) return;
 
@@ -51,15 +50,16 @@
     };
 
     const removeAllPills = () => {
-      document.querySelectorAll('.promo-pills-container').forEach(container => {
-        removePillsByType(container, 'common');
-        removePillsByType(container, 'brand');
-        removePillsByType(container, 'individual');
-      });
-      document.querySelectorAll('.order-products-table-name, .subrow-name-field').forEach(nameBlock => {
-        const totalDiv = nameBlock.parentNode?.parentNode?.querySelector('.promo-pill-total') ||
-                         nameBlock.closest('tr')?.querySelector('.promo-pill-total');
-        if (totalDiv) totalDiv.remove();
+      document.querySelectorAll('.promo-extra-wrapper').forEach(wrapper => {
+        const container = wrapper.querySelector('.promo-pills-container');
+        if (container) container.innerHTML = '';
+        const total = wrapper.querySelector('.promo-pill-total');
+        if (total) total.remove();
+        const inputDiv = wrapper.querySelector('.promo-tool-individual-input');
+        if (inputDiv) {
+          const input = inputDiv.querySelector('input');
+          if (input) input.value = '';
+        }
       });
     };
 
@@ -85,37 +85,99 @@
       return null;
     };
 
-    const getItemId = (row) => {
-      const idCell = row.querySelector('.good-id-cell');
-      if (idCell) return idCell.textContent.trim();
-      const nameBlock = row.querySelector('.order-products-table-name, .subrow-name-field');
-      return nameBlock ? nameBlock.textContent.trim() : null;
-    };
+    // --- Создание обёртки для дополнительных элементов ---
+    const createExtraWrapper = (nameBlock) => {
+      const td = nameBlock.closest('td');
+      if (!td) return null;
 
-    const getItemName = (row) => {
-      const nameBlock = row.querySelector('.order-products-table-name, .subrow-name-field');
-      return nameBlock ? nameBlock.textContent.trim() : null;
-    };
-
-    const getSumFromRow = (row) => {
-      const tds = row.querySelectorAll('td');
-      if (tds.length < 6) return null;
-      const sumCell = tds[5];
-      return sumCell ? sumCell.innerText.trim() : null;
-    };
-
-    const createPillContainer = (nameBlock) => {
-      let container = nameBlock.parentNode?.querySelector('.promo-pills-container');
-      if (!container) {
-        container = document.createElement('div');
-        container.className = 'promo-pills-container';
-        container.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin-top:0;align-items:center;";
-        nameBlock.parentNode?.insertBefore(container, nameBlock.nextSibling);
+      let cellWrapper = td.querySelector(':scope > .promo-cell-wrapper');
+      if (!cellWrapper) {
+        cellWrapper = document.createElement('div');
+        cellWrapper.className = 'promo-cell-wrapper';
+        cellWrapper.style.cssText = 'display:flex;flex-direction:column;width:100%;';
+        while (td.firstChild) {
+          cellWrapper.appendChild(td.firstChild);
+        }
+        td.appendChild(cellWrapper);
       }
-      return container;
+
+      let wrapper = cellWrapper.querySelector(':scope > .promo-extra-wrapper');
+      if (wrapper) return wrapper;
+
+      const isSubrow = nameBlock.classList.contains('subrow-name-field') || 
+                       nameBlock.closest('._table-subrow-cell_') !== null;
+      const marginLeft = isSubrow ? '68px' : '20px';
+
+      wrapper = document.createElement('div');
+      wrapper.className = 'promo-extra-wrapper';
+      wrapper.style.cssText = `flex:0 0 auto;width:auto;margin-top:2px;margin-left:${marginLeft};`;
+      cellWrapper.appendChild(wrapper);
+
+      const container = document.createElement('div');
+      container.className = 'promo-pills-container';
+      container.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;align-items:center;";
+      wrapper.appendChild(container);
+
+      const inputDiv = document.createElement('div');
+      inputDiv.className = 'promo-tool-individual-input';
+      inputDiv.style.cssText = "margin-top:4px;";
+      wrapper.appendChild(inputDiv);
+
+      return wrapper;
     };
 
+    const getPillContainer = (nameBlock) => {
+      const wrapper = createExtraWrapper(nameBlock);
+      if (!wrapper) return null;
+      return wrapper.querySelector('.promo-pills-container');
+    };
+
+    const getOrCreateIndividualInput = (nameBlock) => {
+      const wrapper = createExtraWrapper(nameBlock);
+      if (!wrapper) return null;
+      let inputDiv = wrapper.querySelector('.promo-tool-individual-input');
+      if (!inputDiv) {
+        inputDiv = document.createElement('div');
+        inputDiv.className = 'promo-tool-individual-input';
+        inputDiv.style.cssText = "margin-top:4px;";
+        wrapper.appendChild(inputDiv);
+      }
+      if (!inputDiv.querySelector('input')) {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '1';
+        input.step = '1';
+        input.placeholder = '% кешбэка';
+        input.style.cssText = `
+          width:80px;
+          padding:2px 6px;
+          border:1px solid #ccc;
+          border-radius:12px;
+          font-size:11px;
+          text-align:center;
+          transition:all 0.2s ease;
+          -moz-appearance:textfield;
+        `;
+        input.addEventListener('focus', () => input.style.borderColor = '#ff1e01');
+        input.addEventListener('blur', () => input.style.borderColor = '#ccc');
+        input.addEventListener('input', function() {
+          let val = parseInt(this.value, 10);
+          if (!isNaN(val) && val < 1) {
+            this.value = '';
+          } else if (isNaN(val) && this.value !== '') {
+            this.value = '';
+          } else if (this.value !== '' && !Number.isInteger(val)) {
+            this.value = Math.floor(val);
+          }
+        });
+        inputDiv.appendChild(input);
+      }
+      return inputDiv;
+    };
+
+    // --- Создание пиллов и total ---
     const createPillWithAnimation = (text, type, container, delayMs) => {
+      if (!container) return;
       const pill = document.createElement('span');
       pill.className = `promo-pill-${type}`;
       pill.textContent = text;
@@ -132,12 +194,19 @@
       return pill;
     };
 
-    const createTotalPillWithAnimation = (totalValue, container, nameBlock, delayMs) => {
+    const createTotalPillWithAnimation = (totalValue, nameBlock, delayMs) => {
+      const wrapper = createExtraWrapper(nameBlock);
+      if (!wrapper) return;
+      const oldTotal = wrapper.querySelector('.promo-pill-total');
+      if (oldTotal) oldTotal.remove();
+
+      const container = wrapper.querySelector('.promo-pills-container');
+      if (!container) return;
       const pill = document.createElement('div');
       pill.className = 'promo-pill-total';
       pill.textContent = `Всего ${totalValue} бонусов`;
       pill.style.cssText = "background:linear-gradient(135deg,#ff7b7b 0%,#ff3d3d 25%,#ff1e01 60%,#e50000 100%);color:#fff;border-radius:16px;padding:2px 8px;font-size:12px;display:inline-block;white-space:nowrap;margin-bottom:6px;margin-top:8px;transform:scale(0);opacity:0;transition:transform 0.15s cubic-bezier(0.34,1.2,0.64,1),opacity 0.15s ease;box-shadow:0 2px 8px rgba(255,30,1,.3)";
-      nameBlock.parentNode?.insertBefore(pill, container);
+      wrapper.insertBefore(pill, container);
       setTimeout(() => {
         pill.style.transform = 'scale(1)';
         pill.style.opacity = '1';
@@ -145,24 +214,7 @@
       return pill;
     };
 
-    const createIndividualInput = (row, nameBlock) => {
-      if (row.querySelector('.promo-tool-individual-input')) return;
-      const inputDiv = document.createElement('div');
-      inputDiv.className = 'promo-tool-individual-input';
-      inputDiv.style.cssText = "margin-top:4px;";
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.placeholder = '% кешбэка по категории';
-      input.step = 'any';
-      input.style.cssText = "width:80px;padding:2px 6px;border:1px solid #ccc;border-radius:12px;font-size:11px;transition:all 0.2s ease;";
-      input.addEventListener('focus', () => input.style.borderColor = '#ff1e01');
-      input.addEventListener('blur', () => input.style.borderColor = '#ccc');
-      inputDiv.appendChild(input);
-      nameBlock.parentNode?.insertBefore(inputDiv, nameBlock.nextSibling);
-      const container = createPillContainer(nameBlock);
-      return inputDiv;
-    };
-
+    // --- Состояние ---
     let activeTab = 'premium';
     let commonPercentage = 0;
     let summarySpan = null;
@@ -172,6 +224,13 @@
     let helpContent = null;
     let helpVisible = false;
     let confirmBubble = null;
+    let currentCart = null;
+
+    // --- Функции сохранения/восстановления ---
+    const getCartSuffix = () => {
+      if (!currentCart) return '';
+      return '_' + currentCart;
+    };
 
     const saveState = () => {
       if (!window.location.pathname.includes('/order/')) return;
@@ -183,35 +242,38 @@
         checkboxes: [],
         individualValues: []
       };
-      // Собираем состояние только с чекбоксов (которые только на строках-заменах)
       document.querySelectorAll('.promo-tool-checkbox').forEach(cb => {
-        const row = cb.closest('tr');
+        let nameBlock = cb.closest('.order-products-table-name');
+        let isSubrow = false;
+        if (!nameBlock) {
+          nameBlock = cb.closest('.subrow-name-field');
+          isSubrow = true;
+        }
+        if (!nameBlock) return;
+        const row = nameBlock.closest('tr');
         if (!row) return;
         const tds = row.querySelectorAll('td');
         if (tds.length < 6) return;
-        const itemId = getItemId(row);
-        if (!itemId) return;
+        const name = nameBlock.textContent.trim();
         const sum = tds[5].innerText.trim();
-        const individualInput = row.querySelector('.promo-tool-individual-input input');
-        state.checkboxes.push({
-          id: itemId,
-          checked: cb.checked,
-          sum: sum
-        });
-        state.individualValues.push({
-          id: itemId,
-          value: individualInput ? individualInput.value : ''
-        });
+        const wrapper = createExtraWrapper(nameBlock);
+        let individualValue = '';
+        if (wrapper) {
+          const inputEl = wrapper.querySelector('.promo-tool-individual-input input');
+          if (inputEl) individualValue = inputEl.value;
+        }
+        state.checkboxes.push({ name, sum, checked: cb.checked, hasPromo: cb.dataset.promo === '1', isSubrow });
+        state.individualValues.push({ name, value: individualValue });
       });
-      sessionStorage.setItem('ozonCashbackState_' + window.location.pathname, JSON.stringify(state));
+      sessionStorage.setItem('ozonCashbackState_' + window.location.pathname + getCartSuffix(), JSON.stringify(state));
     };
 
     const restoreState = () => {
-      const saved = sessionStorage.getItem('ozonCashbackState_' + window.location.pathname);
+      const saved = sessionStorage.getItem('ozonCashbackState_' + window.location.pathname + getCartSuffix());
       if (!saved) return;
       try {
         const state = JSON.parse(saved);
-        activeTab = state.activeTab || 'premium';
+        activeTab = state.activeTab;
         commonPercentage = state.commonPercentage || 0;
         const premiumInput = document.querySelector('.premium-panel-input');
         if (premiumInput) premiumInput.value = state.premiumPercent || '';
@@ -237,30 +299,37 @@
         };
         switchTab(activeTab);
 
-        // Восстанавливаем чекбоксы по идентификатору (артикулу)
         state.checkboxes.forEach(savedCb => {
-          const cb = [...document.querySelectorAll('.promo-tool-checkbox')].find(c => {
-            const row = c.closest('tr');
-            return row && getItemId(row) === savedCb.id;
-          });
+          let cb;
+          if (savedCb.isSubrow) {
+            cb = [...document.querySelectorAll('.subrow-name-field .promo-tool-checkbox')].find(c => c.closest('.subrow-name-field')?.textContent.trim() === savedCb.name);
+          } else {
+            cb = [...document.querySelectorAll('.order-products-table-name .promo-tool-checkbox')].find(c => c.closest('.order-products-table-name')?.textContent.trim() === savedCb.name);
+          }
           if (cb) {
             cb.checked = savedCb.checked;
             const changeEvent = new Event('change', { bubbles: true });
             cb.dispatchEvent(changeEvent);
           }
         });
-
-        // Восстанавливаем индивидуальные инпуты
         state.individualValues.forEach(savedInd => {
-          const input = [...document.querySelectorAll('.promo-tool-individual-input input')].find(inp => {
-            const row = inp.closest('tr');
-            return row && getItemId(row) === savedInd.id;
-          });
-          if (input) input.value = savedInd.value;
+          let wrapper;
+          const nameBlock = [...document.querySelectorAll('.order-products-table-name')].find(n => n.textContent.trim() === savedInd.name);
+          if (nameBlock) {
+            wrapper = createExtraWrapper(nameBlock);
+          } else {
+            const subrowName = [...document.querySelectorAll('.subrow-name-field')].find(n => n.textContent.trim() === savedInd.name);
+            if (subrowName) wrapper = createExtraWrapper(subrowName);
+          }
+          if (wrapper) {
+            const input = wrapper.querySelector('.promo-tool-individual-input input');
+            if (input) input.value = savedInd.value;
+          }
         });
       } catch (e) { console.error('Restore error', e); }
     };
 
+    // --- Сброс и анимация ---
     const resetAllCalculationsOnCheckboxChange = () => {
       removeAllPills();
       resetSummaryPanelToWaiting();
@@ -292,29 +361,13 @@
       summarySpan.dataset.hasCalculation = 'false';
     };
 
-    const updateSummaryPanel = (total = null) => {
+    const updateSummaryPanel = (total) => {
       if (!summarySpan) return;
-      if (total === null) {
-        let totalOrderBonuses = 0;
-        document.querySelectorAll('.promo-tool-checkbox:checked').forEach(cb => {
-          const row = cb.closest('tr');
-          if (!row) return;
-          const totalPillDiv = row.querySelector('.promo-pill-total');
-          if (totalPillDiv) {
-            const match = totalPillDiv.textContent.match(/Всего ([\d.]+) бонусов/);
-            if (match) totalOrderBonuses += parseFloat(match[1]);
-          }
-        });
-        total = totalOrderBonuses;
-      }
-      if (total === 0 && !summarySpan.dataset.hasCalculation) {
-        resetSummaryPanel();
-      } else {
-        animateSummaryPanel(`Всего бонусов за заказ: <strong>${total.toFixed(2)}</strong>`, 'linear-gradient(135deg,#ff7b7b 0%,#ff3d3d 25%,#ff1e01 60%,#e50000 100%)', '#fff');
-        summarySpan.dataset.hasCalculation = 'true';
-      }
+      animateSummaryPanel(`Всего бонусов за заказ: <strong>${total.toFixed(2)}</strong>`, 'linear-gradient(135deg,#ff7b7b 0%,#ff3d3d 25%,#ff1e01 60%,#e50000 100%)', '#fff');
+      summarySpan.dataset.hasCalculation = 'true';
     };
 
+    // --- Всплывающее подтверждение сброса ---
     const hideConfirmBubble = () => {
       if (confirmBubble) {
         confirmBubble.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
@@ -353,7 +406,7 @@
 
     const resetAllCalculations = () => {
       removeAllPills();
-      document.querySelectorAll('.promo-tool-individual-input input').forEach(input => input.value = '');
+      document.querySelectorAll('.promo-extra-wrapper .promo-tool-individual-input input').forEach(inp => inp.value = '');
       const premiumInput = document.querySelector('.premium-panel-input');
       if (premiumInput) premiumInput.value = '';
       const basicInput = document.querySelector('.basic-panel-input');
@@ -364,6 +417,7 @@
       bar('Все вычисления сброшены');
     };
 
+    // --- Панель помощи ---
     const toggleHelpPanel = () => {
       if (!helpPanel || !helpContent) return;
       if (helpVisible) {
@@ -405,6 +459,7 @@
       helpVisible = !helpVisible;
     };
 
+    // --- Основная функция расчёта ---
     const calculateAll = async () => {
       if (isCalculating) return;
       isCalculating = true;
@@ -416,7 +471,14 @@
 
       const checkedBoxes = [...document.querySelectorAll('.promo-tool-checkbox:checked')];
       for (const cb of checkedBoxes) {
-        const row = cb.closest('tr');
+        let nameBlock = cb.closest('.order-products-table-name');
+        let isSubrow = false;
+        if (!nameBlock) {
+          nameBlock = cb.closest('.subrow-name-field');
+          isSubrow = true;
+        }
+        if (!nameBlock) continue;
+        const row = nameBlock.closest('tr');
         if (!row) continue;
         const tds = row.querySelectorAll('td');
         if (tds.length < 6) continue;
@@ -425,17 +487,17 @@
         const sumText = sumCell.innerText.trim();
         const sumVal = getNumberFromSum(sumText);
         const { hasPromo } = detectPromo(tds);
-
-        // Находим блок с названием (может быть в .order-products-table-name или .subrow-name-field)
-        const nameBlock = row.querySelector('.order-products-table-name, .subrow-name-field');
-        if (!nameBlock) continue;
-
-        const container = createPillContainer(nameBlock);
-        removePillsByType(container, 'common');
-        removePillsByType(container, 'brand');
-        removePillsByType(container, 'individual');
-        const oldTotal = row.querySelector('.promo-pill-total');
-        if (oldTotal) oldTotal.remove();
+        const container = getPillContainer(nameBlock);
+        if (container) {
+          removePillsByType(container, 'common');
+          removePillsByType(container, 'brand');
+          removePillsByType(container, 'individual');
+        }
+        const wrapper = createExtraWrapper(nameBlock);
+        if (wrapper) {
+          const oldTotal = wrapper.querySelector('.promo-pill-total');
+          if (oldTotal) oldTotal.remove();
+        }
 
         let commonValue = 0, brandValue = 0, individualValue = 0;
         if (!hasPromo) {
@@ -446,23 +508,24 @@
             if (brandName) brandValue = sumVal * 20 / 100;
           }
         }
-        const individualInput = row.querySelector('.promo-tool-individual-input input');
-        if (individualInput) {
-          let indPercent = parseFloat(individualInput.value);
-          if (!isNaN(indPercent) && indPercent !== 0) individualValue = sumVal * indPercent / 100;
+        if (wrapper) {
+          const indInput = wrapper.querySelector('.promo-tool-individual-input input');
+          if (indInput) {
+            let indPercent = parseFloat(indInput.value);
+            if (!isNaN(indPercent) && indPercent !== 0) individualValue = sumVal * indPercent / 100;
+          }
         }
-
         const totalValue = commonValue + brandValue + individualValue;
         if (totalValue === 0) continue;
         const totalFormatted = totalValue.toFixed(2);
         let delay = 0;
-        createTotalPillWithAnimation(totalFormatted, container, nameBlock, delay);
+        createTotalPillWithAnimation(totalFormatted, nameBlock, delay);
         delay += 50;
         if (!hasPromo) {
           if (commonPercentage !== 0) {
             const formatted = commonValue.toFixed(2);
             const label = activeTab === 'premium' ? 'Премиум' : 'Базовый';
-            createPillWithAnimation(`${formatted} ${label}`, 'common', container, delay);
+            if (container) createPillWithAnimation(`${formatted} ${label}`, 'common', container, delay);
             delay += 50;
           }
           if (activeTab === 'premium') {
@@ -470,14 +533,14 @@
             const brandName = getBrandName(title);
             if (brandName) {
               const formatted = brandValue.toFixed(2);
-              createPillWithAnimation(`${formatted} за ${brandName}`, 'brand', container, delay);
+              if (container) createPillWithAnimation(`${formatted} за ${brandName}`, 'brand', container, delay);
               delay += 50;
             }
           }
         }
         if (individualValue > 0) {
           const indFormatted = individualValue.toFixed(2);
-          createPillWithAnimation(`${indFormatted} по категориям`, 'individual', container, delay);
+          if (container) createPillWithAnimation(`${indFormatted} по категориям`, 'individual', container, delay);
           delay += 50;
         }
         await sleep(delay);
@@ -485,9 +548,12 @@
 
       let totalOrderBonuses = 0;
       document.querySelectorAll('.promo-tool-checkbox:checked').forEach(cb => {
-        const row = cb.closest('tr');
-        if (!row) return;
-        const totalPillDiv = row.querySelector('.promo-pill-total');
+        let nameBlock = cb.closest('.order-products-table-name');
+        if (!nameBlock) nameBlock = cb.closest('.subrow-name-field');
+        if (!nameBlock) return;
+        const wrapper = createExtraWrapper(nameBlock);
+        if (!wrapper) return;
+        const totalPillDiv = wrapper.querySelector('.promo-pill-total');
         if (totalPillDiv) {
           const match = totalPillDiv.textContent.match(/Всего ([\d.]+) бонусов/);
           if (match) totalOrderBonuses += parseFloat(match[1]);
@@ -499,7 +565,39 @@
       isCalculating = false;
     };
 
+    // --- Определение текущей корзины ---
+    const detectCartType = () => {
+      const input = document.querySelector('input[name="cartType"]');
+      if (!input) return null;
+      const activeOption = document.querySelector('[class*="_select-menu-option-active_"]');
+      if (activeOption) {
+        const text = activeOption.textContent.trim();
+        if (text.includes('после сборки')) return 'ACTUAL_CART';
+        if (text.includes('до сборки')) return 'FIRST_CART';
+      }
+      try {
+        const val = JSON.parse(input.value);
+        return val.value;
+      } catch (e) {
+        return null;
+      }
+    };
+
+    // --- Инициализация ---
     const init = async () => {
+      document.querySelectorAll('.promo-cell-wrapper').forEach(w => {
+        const td = w.parentNode;
+        if (td) {
+          while (w.firstChild) {
+            td.insertBefore(w.firstChild, w);
+          }
+          w.remove();
+        }
+      });
+      document.querySelectorAll('.promo-extra-wrapper').forEach(w => w.remove());
+
+      currentCart = detectCartType();
+
       const tab = [...document.querySelectorAll("div[class*='_tabs-item']")].find(e => e.textContent.includes("Состав заказа"));
       if (tab) {
         tab.click();
@@ -510,141 +608,42 @@
       const table = rows[0]?.closest("table");
       if (table) table.style.borderCollapse = 'collapse';
 
-      // Проходим по строкам с учётом замен
-      let i = 0;
-      while (i < rows.length) {
-        const row = rows[i];
-        const tds = row.querySelectorAll('td');
-        if (tds.length < 6) { i++; continue; }
-
-        // Проверяем, является ли текущая строка заменой (содержит subrow и replacement-ending-line)
-        const isSubrow = row.querySelector('._table-subrow-cell_') && row.querySelector('.replacement-ending-line');
-        // Проверяем, является ли строка исходником (содержит replaced-row и иконку замены)
-        const isOriginal = row.querySelector('.replaced-row') && row.querySelector('.item-replaced-icon');
-
-        let rowToProcess = row;
-        let originalRow = null;
-
-        if (isSubrow) {
-          // Это строка-замена. Следующая строка должна быть исходником
-          if (i + 1 < rows.length) {
+      if (currentCart === 'ACTUAL_CART') {
+        let i = 0;
+        while (i < rows.length) {
+          const row = rows[i];
+          const tds = row.querySelectorAll('td');
+          if (tds.length < 6) { i++; continue; }
+          const isSubrow = row.querySelector('[class*="_table-subrow-cell_"]');
+          if (isSubrow) {
             const nextRow = rows[i + 1];
-            const nextIsOriginal = nextRow.querySelector('.replaced-row') && nextRow.querySelector('.item-replaced-icon');
-            if (nextIsOriginal) {
-              // Нашли пару: замена (текущая) и исходник (следующая)
-              originalRow = nextRow;
-              // Обрабатываем только строку-замену (создаём чекбокс, инпут)
-              const nameBlock = row.querySelector('.subrow-name-field');
-              if (nameBlock) {
-                // Проверяем, есть ли уже чекбокс
-                if (!row.querySelector('.promo-tool-checkbox')) {
-                  const { hasPromo } = detectPromo(tds);
-                  const sum = (tds[5].innerText || "").trim();
-                  const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
-                  // Применяем границу к строке-замене
-                  row.style.removeProperty('background');
-                  row.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
-                  row.style.setProperty('box-shadow', 'none', 'important');
-                  row.style.setProperty('border-top', 'none', 'important');
-                  row.style.setProperty('border-right', 'none', 'important');
-                  row.style.setProperty('border-bottom', 'none', 'important');
-                  // Применяем ту же границу к строке-исходнику
-                  if (originalRow) {
-                    originalRow.style.removeProperty('background');
-                    originalRow.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
-                    originalRow.style.setProperty('box-shadow', 'none', 'important');
-                    originalRow.style.setProperty('border-top', 'none', 'important');
-                    originalRow.style.setProperty('border-right', 'none', 'important');
-                    originalRow.style.setProperty('border-bottom', 'none', 'important');
-                  }
-
-                  // Создаём чекбокс
-                  const cb = document.createElement("input");
-                  cb.type = "checkbox";
-                  cb.className = "promo-tool-checkbox";
-                  cb.checked = !hasPromo;
-                  const itemId = getItemId(row);
-                  cb.dataset.id = itemId || '';
-                  cb.dataset.name = nameBlock.textContent.trim();
-                  cb.dataset.sum = sum;
-                  cb.dataset.promo = hasPromo ? "1" : "0";
-                  // Вставляем чекбокс перед названием
-                  nameBlock.style.display = "flex";
-                  nameBlock.style.alignItems = "center";
-                  nameBlock.style.gap = "6px";
-                  nameBlock.prepend(cb);
-
-                  // Создаём индивидуальный инпут
-                  createIndividualInput(row, nameBlock);
-                }
+            if (nextRow) {
+              const nextNameBlock = nextRow.querySelector('.order-products-table-name.row-has-subrows');
+              if (nextNameBlock) {
+                processReplacementPair(row, nextRow);
+                i += 2;
+                continue;
               }
-              // Пропускаем исходник на следующей итерации
-              i += 2;
-              continue;
             }
-          }
-        }
-
-        // Если не нашли пару, обрабатываем как обычный товар
-        const nameBlock = row.querySelector('.order-products-table-name');
-        if (nameBlock && !row.querySelector('.promo-tool-checkbox') && !isOriginal) {
-          const name = nameBlock.textContent.trim();
-          if (!name || name.toLowerCase().includes("пакет")) { i++; continue; }
-          const { hasPromo } = detectPromo(tds);
-          const sum = (tds[5].innerText || "").trim();
-          const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
-          row.style.removeProperty('background');
-          row.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
-          row.style.setProperty('box-shadow', 'none', 'important');
-          row.style.setProperty('border-top', 'none', 'important');
-          row.style.setProperty('border-right', 'none', 'important');
-          row.style.setProperty('border-bottom', 'none', 'important');
-          nameBlock.style.display = "flex";
-          nameBlock.style.alignItems = "center";
-          nameBlock.style.gap = "6px";
-          const cb = document.createElement("input");
-          cb.type = "checkbox";
-          cb.className = "promo-tool-checkbox";
-          cb.checked = !hasPromo;
-          const itemId = getItemId(row);
-          cb.dataset.id = itemId || '';
-          cb.dataset.name = name;
-          cb.dataset.sum = sum;
-          cb.dataset.promo = hasPromo ? "1" : "0";
-          nameBlock.prepend(cb);
-          createIndividualInput(row, nameBlock);
-        }
-        i++;
-      }
-
-      // Слушатель изменений чекбоксов
-      document.body.addEventListener('change', e => {
-        if (e.target.classList?.contains('promo-tool-checkbox')) {
-          const row = e.target.closest('tr');
-          if (!row) return;
-          if (e.target.checked) {
-            // Если чекбокс включен, убедимся, что индивидуальный инпут есть
-            if (!row.querySelector('.promo-tool-individual-input')) {
-              const nameBlock = row.querySelector('.order-products-table-name, .subrow-name-field');
-              if (nameBlock) createIndividualInput(row, nameBlock);
-            }
-            // Удаляем старые пиллы
-            const container = createPillContainer(nameBlock);
-            removePillsByType(container, 'common');
-            removePillsByType(container, 'brand');
-            removePillsByType(container, 'individual');
-            const oldTotal = row.querySelector('.promo-pill-total');
-            if (oldTotal) oldTotal.remove();
+            i++;
+            continue;
           } else {
-            // Если чекбокс выключен, удаляем индивидуальный инпут и пиллы
-            const indInput = row.querySelector('.promo-tool-individual-input');
-            if (indInput) indInput.remove();
-            const container = row.querySelector('.promo-pills-container');
-            if (container) container.remove();
+            const nameBlock = tds[0]?.querySelector(".order-products-table-name");
+            if (nameBlock) {
+              processNormalRow(row, nameBlock);
+            }
+            i++;
           }
-          resetAllCalculationsOnCheckboxChange();
         }
-      });
+      } else {
+        for (const row of rows) {
+          const tds = row.querySelectorAll('td');
+          if (tds.length < 6) continue;
+          const nameBlock = tds[0]?.querySelector(".order-products-table-name");
+          if (!nameBlock) continue;
+          processNormalRow(row, nameBlock);
+        }
+      }
 
       if (table && !document.getElementById("promo-tool-calc-wrap")) {
         const wrap = document.createElement("div");
@@ -653,7 +652,66 @@
         const controlsRow = document.createElement("div");
         controlsRow.style.cssText = "display:flex;align-items:center;gap:12px;background:#f8f9fa;padding:6px 12px;border-radius:20px;width:fit-content;flex-wrap:wrap;transition:all 0.2s ease";
         const style = document.createElement('style');
-        style.textContent = ".promo-tab-btn{padding:4px 12px;border:none;border-radius:18px;cursor:pointer;background:transparent;transition:all 0.2s ease}.promo-tab-btn.active{background:#fff!important;font-weight:bold!important}.help-btn{width:24px;height:24px;border-radius:50%;background:#e9ecef;border:none;cursor:pointer;font-size:14px;font-weight:bold;color:#666;display:inline-flex;align-items:center;justify-content:center;transition:all 0.2s ease}.help-btn:hover{background:#dee2e6;color:#333;transform:scale(1.05)}.reset-btn{width:24px;height:24px;border-radius:50%;background:#e9ecef;border:none;cursor:pointer;font-size:14px;font-weight:bold;color:#666;display:inline-flex;align-items:center;justify-content:center;transition:all 0.2s ease}.reset-btn:hover{background:#ffb3b3;color:#ff1e01;transform:scale(1.05)}.help-panel{background:#f8f9fa;border-radius:20px;overflow:hidden;transform-origin:top;transition:transform 0.25s ease, opacity 0.25s ease, margin 0.25s ease, padding 0.25s ease;margin-top:0;padding:0 16px}.help-panel-content{font-size:13px;line-height:1.5;opacity:0;transition:opacity 0.2s ease}.help-panel-content h3{margin:0 0 12px 0;font-size:16px;font-weight:bold}.help-panel-content em{font-style:italic}.help-panel-content strong{font-weight:bold}.help-panel-content .quote{border-left:2px solid #ddd;padding-left:12px;margin:8px 0;color:#555}.help-panel-content hr{margin:12px 0;border:none;border-top:1px solid #e0e0e0}";
+        style.textContent = `
+          .promo-tab-btn{padding:4px 12px;border:none;border-radius:18px;cursor:pointer;background:transparent;transition:all 0.2s ease}
+          .promo-tab-btn.active{background:#fff!important;font-weight:bold!important}
+          .help-btn{width:24px;height:24px;border-radius:50%;background:#e9ecef;border:none;cursor:pointer;font-size:14px;font-weight:bold;color:#666;display:inline-flex;align-items:center;justify-content:center;transition:all 0.2s ease}
+          .help-btn:hover{background:#dee2e6;color:#333;transform:scale(1.05)}
+          .reset-btn{width:24px;height:24px;border-radius:50%;background:#e9ecef;border:none;cursor:pointer;font-size:14px;font-weight:bold;color:#666;display:inline-flex;align-items:center;justify-content:center;transition:all 0.2s ease}
+          .reset-btn:hover{background:#ffb3b3;color:#ff1e01;transform:scale(1.05)}
+          .help-panel{background:#f8f9fa;border-radius:20px;overflow:hidden;transform-origin:top;transition:transform 0.25s ease, opacity 0.25s ease, margin 0.25s ease, padding 0.25s ease;margin-top:0;padding:0 16px}
+          .help-panel-content{font-size:13px;line-height:1.5;opacity:0;transition:opacity 0.2s ease}
+          .help-panel-content h3{margin:0 0 12px 0;font-size:16px;font-weight:bold}
+          .help-panel-content em{font-style:italic}
+          .help-panel-content strong{font-weight:bold}
+          .help-panel-content .quote{border-left:2px solid #ddd;padding-left:12px;margin:8px 0;color:#555}
+          .help-panel-content hr{margin:12px 0;border:none;border-top:1px solid #e0e0e0}
+
+          .promo-tool-checkbox {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            border: 2px solid #ccc;
+            border-radius: 4px;
+            outline: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+            flex-shrink: 0;
+            background: #fff;
+          }
+          .promo-tool-checkbox:hover {
+            border-color: #999;
+          }
+          .promo-tool-checkbox:checked {
+            background: #ff1e01;
+            border-color: #ff1e01;
+            box-shadow: 0 2px 6px rgba(255,30,1,0.4);
+          }
+          .promo-tool-checkbox:checked::after {
+            content: "✓";
+            position: absolute;
+            top: -2px;
+            left: 2px;
+            font-size: 16px;
+            color: #fff;
+            font-weight: bold;
+          }
+          .promo-tool-checkbox:focus-visible {
+            outline: 2px solid #ff1e01;
+            outline-offset: 2px;
+          }
+
+          input[type="number"]::-webkit-outer-spin-button,
+          input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+          }
+          input[type="number"] {
+            -moz-appearance: textfield;
+          }
+        `;
         document.head.appendChild(style);
 
         const leftGroup = document.createElement("div");
@@ -690,12 +748,23 @@
         premiumPanel.style.cssText = "display:flex;gap:6px;align-items:center";
         const premiumInput = document.createElement("input");
         premiumInput.type = "number";
+        premiumInput.min = "1";
+        premiumInput.step = "1";
         premiumInput.placeholder = "%";
-        premiumInput.step = "any";
         premiumInput.className = "premium-panel-input";
-        premiumInput.style.cssText = "width:60px;padding:4px 6px;border:1px solid #ccc;border-radius:12px;text-align:center;transition:all 0.2s ease";
+        premiumInput.style.cssText = "width:60px;padding:4px 6px;border:1px solid #ccc;border-radius:12px;text-align:center;transition:all 0.2s ease;";
         premiumInput.addEventListener('focus', () => premiumInput.style.borderColor = '#ff1e01');
         premiumInput.addEventListener('blur', () => premiumInput.style.borderColor = '#ccc');
+        premiumInput.addEventListener('input', function() {
+          let val = parseInt(this.value, 10);
+          if (!isNaN(val) && val < 1) {
+            this.value = '';
+          } else if (isNaN(val) && this.value !== '') {
+            this.value = '';
+          } else if (this.value !== '' && !Number.isInteger(val)) {
+            this.value = Math.floor(val);
+          }
+        });
         premiumInput.value = "";
         premiumPanel.appendChild(premiumInput);
         const basicPanel = document.createElement("div");
@@ -703,12 +772,23 @@
         basicPanel.style.cssText = "display:none;gap:6px;align-items:center";
         const basicInput = document.createElement("input");
         basicInput.type = "number";
+        basicInput.min = "1";
+        basicInput.step = "1";
         basicInput.placeholder = "%";
-        basicInput.step = "any";
         basicInput.className = "basic-panel-input";
-        basicInput.style.cssText = "width:60px;padding:4px 6px;border:1px solid #ccc;border-radius:12px;text-align:center;transition:all 0.2s ease";
+        basicInput.style.cssText = "width:60px;padding:4px 6px;border:1px solid #ccc;border-radius:12px;text-align:center;transition:all 0.2s ease;";
         basicInput.addEventListener('focus', () => basicInput.style.borderColor = '#ff1e01');
         basicInput.addEventListener('blur', () => basicInput.style.borderColor = '#ccc');
+        basicInput.addEventListener('input', function() {
+          let val = parseInt(this.value, 10);
+          if (!isNaN(val) && val < 1) {
+            this.value = '';
+          } else if (isNaN(val) && this.value !== '') {
+            this.value = '';
+          } else if (this.value !== '' && !Number.isInteger(val)) {
+            this.value = Math.floor(val);
+          }
+        });
         basicInput.value = "";
         basicPanel.appendChild(basicInput);
         panelsContainer.appendChild(premiumPanel);
@@ -773,15 +853,165 @@
 
         table.parentNode.insertBefore(wrap, table);
       }
+
       restoreState();
       saveState();
       bar("Готово");
     };
 
+    // --- Обработка обычной строки ---
+    function processNormalRow(row, nameBlock) {
+      const tds = row.querySelectorAll('td');
+      if (tds.length < 6) return;
+      const name = nameBlock.textContent.trim();
+      if (!name || name.toLowerCase().includes("пакет")) return;
+      const { hasPromo } = detectPromo(tds);
+      const sum = (tds[5].innerText || "").trim();
+      const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
+      row.style.removeProperty('background');
+      row.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
+      row.style.setProperty('box-shadow', 'none', 'important');
+      row.style.setProperty('border-top', 'none', 'important');
+      row.style.setProperty('border-right', 'none', 'important');
+      row.style.setProperty('border-bottom', 'none', 'important');
+
+      nameBlock.style.display = "flex";
+      nameBlock.style.alignItems = "center";
+      nameBlock.style.gap = "6px";
+      if (nameBlock.querySelector(".promo-tool-checkbox")) return;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "promo-tool-checkbox";
+      cb.checked = !hasPromo;
+      cb.dataset.name = name;
+      cb.dataset.sum = sum;
+      cb.dataset.promo = hasPromo ? "1" : "0";
+      nameBlock.prepend(cb);
+
+      if (cb.checked) getOrCreateIndividualInput(nameBlock);
+      createExtraWrapper(nameBlock);
+
+      cb.addEventListener('change', function(e) {
+        const nameBlockLocal = this.closest('.order-products-table-name');
+        if (!nameBlockLocal) return;
+        const wrapper = createExtraWrapper(nameBlockLocal);
+        if (this.checked) {
+          if (wrapper) {
+            getOrCreateIndividualInput(nameBlockLocal);
+            const container = wrapper.querySelector('.promo-pills-container');
+            if (container) container.innerHTML = '';
+          }
+        } else {
+          if (wrapper) {
+            const inputDiv = wrapper.querySelector('.promo-tool-individual-input');
+            if (inputDiv) inputDiv.remove();
+            const container = wrapper.querySelector('.promo-pills-container');
+            if (container) container.innerHTML = '';
+            const total = wrapper.querySelector('.promo-pill-total');
+            if (total) total.remove();
+          }
+        }
+        resetAllCalculationsOnCheckboxChange();
+      });
+    }
+
+    // --- Обработка пары (замена+исходник) ---
+    function processReplacementPair(subrowRow, originalRow) {
+      const subrowTds = subrowRow.querySelectorAll('td');
+      if (subrowTds.length < 6) return;
+      const subrowNameBlock = subrowRow.querySelector('.subrow-name-field');
+      if (!subrowNameBlock) return;
+      const originalNameBlock = originalRow.querySelector('.order-products-table-name.row-has-subrows');
+      if (!originalNameBlock) return;
+
+      const name = subrowNameBlock.textContent.trim();
+      if (!name || name.toLowerCase().includes("пакет")) return;
+
+      const { hasPromo } = detectPromo(subrowTds);
+      const sum = (subrowTds[5].innerText || "").trim();
+      const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
+
+      [subrowRow, originalRow].forEach(row => {
+        row.style.removeProperty('background');
+        row.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
+        row.style.setProperty('box-shadow', 'none', 'important');
+        row.style.setProperty('border-top', 'none', 'important');
+        row.style.setProperty('border-right', 'none', 'important');
+        row.style.setProperty('border-bottom', 'none', 'important');
+      });
+
+      subrowNameBlock.style.display = "flex";
+      subrowNameBlock.style.alignItems = "center";
+      subrowNameBlock.style.gap = "6px";
+      if (subrowNameBlock.querySelector(".promo-tool-checkbox")) return;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "promo-tool-checkbox";
+      cb.checked = !hasPromo;
+      cb.dataset.name = name;
+      cb.dataset.sum = sum;
+      cb.dataset.promo = hasPromo ? "1" : "0";
+      const origId = originalRow.dataset.rowId || (originalRow.dataset.rowId = 'orig_' + Math.random());
+      cb.dataset.originalRowId = origId;
+      cb.dataset.subrowRowId = subrowRow.dataset.rowId || (subrowRow.dataset.rowId = 'sub_' + Math.random());
+      subrowNameBlock.prepend(cb);
+
+      if (cb.checked) getOrCreateIndividualInput(subrowNameBlock);
+      createExtraWrapper(subrowNameBlock);
+
+      cb.addEventListener('change', function(e) {
+        const nameBlockLocal = this.closest('.subrow-name-field');
+        if (!nameBlockLocal) return;
+        const wrapper = createExtraWrapper(nameBlockLocal);
+        if (this.checked) {
+          if (wrapper) {
+            getOrCreateIndividualInput(nameBlockLocal);
+            const container = wrapper.querySelector('.promo-pills-container');
+            if (container) container.innerHTML = '';
+          }
+        } else {
+          if (wrapper) {
+            const inputDiv = wrapper.querySelector('.promo-tool-individual-input');
+            if (inputDiv) inputDiv.remove();
+            const container = wrapper.querySelector('.promo-pills-container');
+            if (container) container.innerHTML = '';
+            const total = wrapper.querySelector('.promo-pill-total');
+            if (total) total.remove();
+          }
+        }
+        resetAllCalculationsOnCheckboxChange();
+      });
+    }
+
+    // --- Подписка на изменение корзины ---
+    const setupCartChangeListener = () => {
+      const input = document.querySelector('input[name="cartType"]');
+      if (input) {
+        input.addEventListener('change', function() {
+          const oldWrap = document.getElementById("promo-tool-calc-wrap");
+          if (oldWrap) oldWrap.remove();
+          removeAllPills();
+          resetSummaryPanelToWaiting();
+          currentCart = detectCartType();
+          init();
+        });
+      }
+    };
+
+    // --- Запуск ---
     init();
+    setupCartChangeListener();
 
     const observer = new MutationObserver(() => {
       if (document.querySelector("tr[class^='_table-row_']") && !document.getElementById("promo-tool-calc-wrap")) {
+        const newCart = detectCartType();
+        if (newCart !== currentCart) {
+          currentCart = newCart;
+          removeAllPills();
+          resetSummaryPanelToWaiting();
+        }
         init();
       }
     });
@@ -789,7 +1019,7 @@
     setTimeout(() => observer.disconnect(), 30000);
   };
 
-  // ----- ЛОГИКА РАБОТЫ С IFRAME -----
+  // ----- IFRAME -----
   const iframe = document.getElementById("frame-page-order");
   if (iframe && iframe.src) {
     const url = iframe.src + (iframe.src.includes("?") ? "&" : "?") + "autocheck=1";
