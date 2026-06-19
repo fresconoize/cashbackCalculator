@@ -85,33 +85,75 @@
       return null;
     };
 
-    // --- Создание обёртки для дополнительных элементов ---
-    const createExtraWrapper = (nameBlock) => {
-      const td = nameBlock.closest('td');
-      if (!td) return null;
-
-      let cellWrapper = td.querySelector(':scope > .promo-cell-wrapper');
-      if (!cellWrapper) {
-        cellWrapper = document.createElement('div');
-        cellWrapper.className = 'promo-cell-wrapper';
-        cellWrapper.style.cssText = 'display:flex;flex-direction:column;width:100%;';
-        while (td.firstChild) {
-          cellWrapper.appendChild(td.firstChild);
-        }
-        td.appendChild(cellWrapper);
+    // --- Обёртка ячейки в flex-контейнер с колонками ---
+    const wrapCellForCheckbox = (td) => {
+      let flexRow = td.querySelector(':scope > .promo-flex-row');
+      if (flexRow) {
+        const checkboxCol = flexRow.querySelector('.promo-checkbox-column');
+        const contentCol = flexRow.querySelector('.promo-content-column');
+        return { flexRow, checkboxCol, contentCol };
       }
 
-      let wrapper = cellWrapper.querySelector(':scope > .promo-extra-wrapper');
+      flexRow = document.createElement('div');
+      flexRow.className = 'promo-flex-row';
+      flexRow.style.cssText = 'display:flex;align-items:flex-start;width:100%;';
+
+      const checkboxCol = document.createElement('div');
+      checkboxCol.className = 'promo-checkbox-column';
+      checkboxCol.style.cssText = 'flex:0 0 30px;min-width:30px;padding-top:2px;';
+
+      const contentCol = document.createElement('div');
+      contentCol.className = 'promo-content-column';
+      contentCol.style.cssText = 'flex:1;min-width:0;';
+
+      while (td.firstChild) {
+        contentCol.appendChild(td.firstChild);
+      }
+
+      flexRow.appendChild(checkboxCol);
+      flexRow.appendChild(contentCol);
+      td.appendChild(flexRow);
+
+      return { flexRow, checkboxCol, contentCol };
+    };
+
+    // --- Создание обёртки для пиллов и инпута ---
+    const createExtraWrapper = (nameBlock) => {
+      let contentCol = nameBlock.closest('.promo-content-column');
+      if (!contentCol) {
+        const td = nameBlock.closest('td');
+        if (!td) return null;
+        wrapCellForCheckbox(td);
+        contentCol = nameBlock.closest('.promo-content-column');
+        if (!contentCol) return null;
+      }
+
+      let wrapper = nameBlock.nextElementSibling;
+      if (wrapper && wrapper.classList.contains('promo-extra-wrapper')) return wrapper;
+
+      wrapper = contentCol.querySelector(':scope > .promo-extra-wrapper');
       if (wrapper) return wrapper;
 
       const isSubrow = nameBlock.classList.contains('subrow-name-field') || 
                        nameBlock.closest('._table-subrow-cell_') !== null;
-      const marginLeft = isSubrow ? '68px' : '20px';
+      const marginLeft = isSubrow ? '48px' : '0px';
 
       wrapper = document.createElement('div');
       wrapper.className = 'promo-extra-wrapper';
       wrapper.style.cssText = `flex:0 0 auto;width:auto;margin-top:2px;margin-left:${marginLeft};`;
-      cellWrapper.appendChild(wrapper);
+
+      const nextSibling = nameBlock.nextSibling;
+      if (nextSibling && nextSibling.parentNode === contentCol) {
+        contentCol.insertBefore(wrapper, nextSibling);
+      } else {
+        const children = contentCol.children;
+        if (children.length > 0) {
+          const lastChild = children[children.length - 1];
+          contentCol.insertBefore(wrapper, lastChild.nextSibling);
+        } else {
+          contentCol.appendChild(wrapper);
+        }
+      }
 
       const container = document.createElement('div');
       container.className = 'promo-pills-container';
@@ -162,13 +204,9 @@
         input.addEventListener('blur', () => input.style.borderColor = '#ccc');
         input.addEventListener('input', function() {
           let val = parseInt(this.value, 10);
-          if (!isNaN(val) && val < 1) {
-            this.value = '';
-          } else if (isNaN(val) && this.value !== '') {
-            this.value = '';
-          } else if (this.value !== '' && !Number.isInteger(val)) {
-            this.value = Math.floor(val);
-          }
+          if (!isNaN(val) && val < 1) this.value = '';
+          else if (isNaN(val) && this.value !== '') this.value = '';
+          else if (this.value !== '' && !Number.isInteger(val)) this.value = Math.floor(val);
         });
         inputDiv.appendChild(input);
       }
@@ -224,14 +262,37 @@
     let helpContent = null;
     let helpVisible = false;
     let confirmBubble = null;
-    let currentCart = null;
+    let initTimeout = null;
 
-    // --- Функции сохранения/восстановления ---
-    const getCartSuffix = () => {
-      if (!currentCart) return '';
-      return '_' + currentCart;
+    const getNameBlockFromCheckbox = (cb) => {
+      const tr = cb.closest('tr');
+      if (!tr) return { nameBlock: null };
+      let nameBlock = tr.querySelector('.order-products-table-name') || tr.querySelector('.subrow-name-field');
+      return { nameBlock };
     };
 
+    const recalcSummary = () => {
+      let totalOrderBonuses = 0;
+      document.querySelectorAll('.promo-tool-checkbox:checked').forEach(cb => {
+        const { nameBlock } = getNameBlockFromCheckbox(cb);
+        if (!nameBlock) return;
+        const wrapper = createExtraWrapper(nameBlock);
+        if (!wrapper) return;
+        const totalPillDiv = wrapper.querySelector('.promo-pill-total');
+        if (totalPillDiv) {
+          const match = totalPillDiv.textContent.match(/Всего ([\d.]+) бонусов/);
+          if (match) totalOrderBonuses += parseFloat(match[1]);
+        }
+      });
+      if (totalOrderBonuses > 0) {
+        updateSummaryPanel(totalOrderBonuses);
+      } else {
+        resetSummaryPanel();
+      }
+      saveState();
+    };
+
+    // --- Сохранение / восстановление ---
     const saveState = () => {
       if (!window.location.pathname.includes('/order/')) return;
       const state = {
@@ -243,17 +304,11 @@
         individualValues: []
       };
       document.querySelectorAll('.promo-tool-checkbox').forEach(cb => {
-        let nameBlock = cb.closest('.order-products-table-name');
-        let isSubrow = false;
-        if (!nameBlock) {
-          nameBlock = cb.closest('.subrow-name-field');
-          isSubrow = true;
-        }
+        const { nameBlock } = getNameBlockFromCheckbox(cb);
         if (!nameBlock) return;
         const row = nameBlock.closest('tr');
-        if (!row) return;
-        const tds = row.querySelectorAll('td');
-        if (tds.length < 6) return;
+        const tds = row?.querySelectorAll('td');
+        if (!tds || tds.length < 6) return;
         const name = nameBlock.textContent.trim();
         const sum = tds[5].innerText.trim();
         const wrapper = createExtraWrapper(nameBlock);
@@ -262,14 +317,19 @@
           const inputEl = wrapper.querySelector('.promo-tool-individual-input input');
           if (inputEl) individualValue = inputEl.value;
         }
-        state.checkboxes.push({ name, sum, checked: cb.checked, hasPromo: cb.dataset.promo === '1', isSubrow });
+        state.checkboxes.push({
+          name,
+          sum,
+          checked: cb.checked,
+          hasPromo: cb.dataset.promo === '1'
+        });
         state.individualValues.push({ name, value: individualValue });
       });
-      sessionStorage.setItem('ozonCashbackState_' + window.location.pathname + getCartSuffix(), JSON.stringify(state));
+      sessionStorage.setItem('cashbackCalculatorState_' + window.location.pathname, JSON.stringify(state));
     };
 
     const restoreState = () => {
-      const saved = sessionStorage.getItem('ozonCashbackState_' + window.location.pathname + getCartSuffix());
+      const saved = sessionStorage.getItem('сashbackCalculatorState_' + window.location.pathname);
       if (!saved) return;
       try {
         const state = JSON.parse(saved);
@@ -280,60 +340,48 @@
         const basicInput = document.querySelector('.basic-panel-input');
         if (basicInput) basicInput.value = state.basicPercent || '';
 
-        const switchTab = (tab) => {
-          if (tab === 'premium') {
-            document.querySelector('.premium-panel-input')?.closest('.cashback-panel')?.style.setProperty('display', 'flex');
-            document.querySelector('.basic-panel-input')?.closest('.cashback-panel')?.style.setProperty('display', 'none');
-            document.querySelectorAll('.promo-tab-btn').forEach(btn => {
-              if (btn.textContent === 'Премиум') btn.classList.add('active');
-              else btn.classList.remove('active');
-            });
-          } else {
-            document.querySelector('.basic-panel-input')?.closest('.cashback-panel')?.style.setProperty('display', 'flex');
-            document.querySelector('.premium-panel-input')?.closest('.cashback-panel')?.style.setProperty('display', 'none');
-            document.querySelectorAll('.promo-tab-btn').forEach(btn => {
-              if (btn.textContent === 'Базовый') btn.classList.add('active');
-              else btn.classList.remove('active');
-            });
-          }
-        };
-        switchTab(activeTab);
+        if (activeTab === 'premium') {
+          document.querySelector('.premium-panel-input')?.closest('.cashback-panel')?.style.setProperty('display', 'flex');
+          document.querySelector('.basic-panel-input')?.closest('.cashback-panel')?.style.setProperty('display', 'none');
+          document.querySelectorAll('.promo-tab-btn').forEach(btn => {
+            if (btn.textContent === 'Премиум') btn.classList.add('active');
+            else btn.classList.remove('active');
+          });
+        } else {
+          document.querySelector('.basic-panel-input')?.closest('.cashback-panel')?.style.setProperty('display', 'flex');
+          document.querySelector('.premium-panel-input')?.closest('.cashback-panel')?.style.setProperty('display', 'none');
+          document.querySelectorAll('.promo-tab-btn').forEach(btn => {
+            if (btn.textContent === 'Базовый') btn.classList.add('active');
+            else btn.classList.remove('active');
+          });
+        }
 
+        const allCbs = [...document.querySelectorAll('.promo-tool-checkbox')];
         state.checkboxes.forEach(savedCb => {
-          let cb;
-          if (savedCb.isSubrow) {
-            cb = [...document.querySelectorAll('.subrow-name-field .promo-tool-checkbox')].find(c => c.closest('.subrow-name-field')?.textContent.trim() === savedCb.name);
-          } else {
-            cb = [...document.querySelectorAll('.order-products-table-name .promo-tool-checkbox')].find(c => c.closest('.order-products-table-name')?.textContent.trim() === savedCb.name);
-          }
+          const cb = allCbs.find(c => {
+            const { nameBlock } = getNameBlockFromCheckbox(c);
+            return nameBlock?.textContent.trim() === savedCb.name;
+          });
           if (cb) {
             cb.checked = savedCb.checked;
             const changeEvent = new Event('change', { bubbles: true });
             cb.dispatchEvent(changeEvent);
           }
         });
+
         state.individualValues.forEach(savedInd => {
-          let wrapper;
-          const nameBlock = [...document.querySelectorAll('.order-products-table-name')].find(n => n.textContent.trim() === savedInd.name);
+          const nameBlock = [...document.querySelectorAll('.order-products-table-name')].find(n => n.textContent.trim() === savedInd.name)
+                         || [...document.querySelectorAll('.subrow-name-field')].find(n => n.textContent.trim() === savedInd.name);
           if (nameBlock) {
-            wrapper = createExtraWrapper(nameBlock);
-          } else {
-            const subrowName = [...document.querySelectorAll('.subrow-name-field')].find(n => n.textContent.trim() === savedInd.name);
-            if (subrowName) wrapper = createExtraWrapper(subrowName);
-          }
-          if (wrapper) {
-            const input = wrapper.querySelector('.promo-tool-individual-input input');
-            if (input) input.value = savedInd.value;
+            const wrapper = createExtraWrapper(nameBlock);
+            if (wrapper) {
+              const input = wrapper.querySelector('.promo-tool-individual-input input');
+              if (input) input.value = savedInd.value;
+            }
           }
         });
+        recalcSummary();
       } catch (e) { console.error('Restore error', e); }
-    };
-
-    // --- Сброс и анимация ---
-    const resetAllCalculationsOnCheckboxChange = () => {
-      removeAllPills();
-      resetSummaryPanelToWaiting();
-      saveState();
     };
 
     const animateSummaryPanel = (newContent, newBackground, newColor) => {
@@ -471,12 +519,7 @@
 
       const checkedBoxes = [...document.querySelectorAll('.promo-tool-checkbox:checked')];
       for (const cb of checkedBoxes) {
-        let nameBlock = cb.closest('.order-products-table-name');
-        let isSubrow = false;
-        if (!nameBlock) {
-          nameBlock = cb.closest('.subrow-name-field');
-          isSubrow = true;
-        }
+        const { nameBlock } = getNameBlockFromCheckbox(cb);
         if (!nameBlock) continue;
         const row = nameBlock.closest('tr');
         if (!row) continue;
@@ -487,6 +530,7 @@
         const sumText = sumCell.innerText.trim();
         const sumVal = getNumberFromSum(sumText);
         const { hasPromo } = detectPromo(tds);
+
         const container = getPillContainer(nameBlock);
         if (container) {
           removePillsByType(container, 'common');
@@ -517,6 +561,7 @@
         }
         const totalValue = commonValue + brandValue + individualValue;
         if (totalValue === 0) continue;
+
         const totalFormatted = totalValue.toFixed(2);
         let delay = 0;
         createTotalPillWithAnimation(totalFormatted, nameBlock, delay);
@@ -546,57 +591,30 @@
         await sleep(delay);
       }
 
-      let totalOrderBonuses = 0;
-      document.querySelectorAll('.promo-tool-checkbox:checked').forEach(cb => {
-        let nameBlock = cb.closest('.order-products-table-name');
-        if (!nameBlock) nameBlock = cb.closest('.subrow-name-field');
-        if (!nameBlock) return;
-        const wrapper = createExtraWrapper(nameBlock);
-        if (!wrapper) return;
-        const totalPillDiv = wrapper.querySelector('.promo-pill-total');
-        if (totalPillDiv) {
-          const match = totalPillDiv.textContent.match(/Всего ([\d.]+) бонусов/);
-          if (match) totalOrderBonuses += parseFloat(match[1]);
-        }
-      });
-      updateSummaryPanel(totalOrderBonuses);
-      saveState();
+      recalcSummary();
       bar(`Кешбэк рассчитан (${commonPercentage}% ${activeTab === 'premium' ? 'Премиум' : 'Базовый'})`);
       isCalculating = false;
     };
 
-    // --- Определение текущей корзины ---
-    const detectCartType = () => {
-      const input = document.querySelector('input[name="cartType"]');
-      if (!input) return null;
-      const activeOption = document.querySelector('[class*="_select-menu-option-active_"]');
-      if (activeOption) {
-        const text = activeOption.textContent.trim();
-        if (text.includes('после сборки')) return 'ACTUAL_CART';
-        if (text.includes('до сборки')) return 'FIRST_CART';
-      }
-      try {
-        const val = JSON.parse(input.value);
-        return val.value;
-      } catch (e) {
-        return null;
-      }
+    const scheduleInit = (delay = 0) => {
+      if (initTimeout) clearTimeout(initTimeout);
+      initTimeout = setTimeout(() => {
+        initTimeout = null;
+        init();
+      }, delay);
     };
 
     // --- Инициализация ---
     const init = async () => {
-      document.querySelectorAll('.promo-cell-wrapper').forEach(w => {
-        const td = w.parentNode;
+      document.querySelectorAll('.promo-flex-row').forEach(row => {
+        const td = row.parentNode;
         if (td) {
-          while (w.firstChild) {
-            td.insertBefore(w.firstChild, w);
-          }
-          w.remove();
+          while (row.firstChild) td.appendChild(row.firstChild);
+          row.remove();
         }
       });
+      document.querySelectorAll('.promo-tool-checkbox').forEach(cb => cb.remove());
       document.querySelectorAll('.promo-extra-wrapper').forEach(w => w.remove());
-
-      currentCart = detectCartType();
 
       const tab = [...document.querySelectorAll("div[class*='_tabs-item']")].find(e => e.textContent.includes("Состав заказа"));
       if (tab) {
@@ -608,41 +626,24 @@
       const table = rows[0]?.closest("table");
       if (table) table.style.borderCollapse = 'collapse';
 
-      if (currentCart === 'ACTUAL_CART') {
-        let i = 0;
-        while (i < rows.length) {
-          const row = rows[i];
-          const tds = row.querySelectorAll('td');
-          if (tds.length < 6) { i++; continue; }
-          const isSubrow = row.querySelector('[class*="_table-subrow-cell_"]');
-          if (isSubrow) {
-            const nextRow = rows[i + 1];
-            if (nextRow) {
-              const nextNameBlock = nextRow.querySelector('.order-products-table-name.row-has-subrows');
-              if (nextNameBlock) {
-                processReplacementPair(row, nextRow);
-                i += 2;
-                continue;
-              }
-            }
-            i++;
-            continue;
-          } else {
-            const nameBlock = tds[0]?.querySelector(".order-products-table-name");
-            if (nameBlock) {
-              processNormalRow(row, nameBlock);
-            }
-            i++;
-          }
+      for (const row of rows) {
+        const tds = row.querySelectorAll('td');
+        if (tds.length < 6) continue;
+        const nameBlock = tds[0]?.querySelector(".order-products-table-name") || tds[0]?.querySelector(".subrow-name-field");
+        if (!nameBlock) continue;
+
+        // Для строк-исходников только цветная граница и пустая колонка, без чекбокса
+        if (nameBlock.classList.contains('row-has-subrows')) {
+          const { hasPromo } = detectPromo(tds);
+          const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
+          const firstTd = tds[0];
+          firstTd.style.borderLeft = `3px solid ${borderColor}`;
+          firstTd.style.paddingLeft = '12px';
+          wrapCellForCheckbox(firstTd); // пустая колонка для выравнивания
+          continue;
         }
-      } else {
-        for (const row of rows) {
-          const tds = row.querySelectorAll('td');
-          if (tds.length < 6) continue;
-          const nameBlock = tds[0]?.querySelector(".order-products-table-name");
-          if (!nameBlock) continue;
-          processNormalRow(row, nameBlock);
-        }
+
+        processNormalRow(row, nameBlock);
       }
 
       if (table && !document.getElementById("promo-tool-calc-wrap")) {
@@ -681,9 +682,7 @@
             flex-shrink: 0;
             background: #fff;
           }
-          .promo-tool-checkbox:hover {
-            border-color: #999;
-          }
+          .promo-tool-checkbox:hover { border-color: #999; }
           .promo-tool-checkbox:checked {
             background: #ff1e01;
             border-color: #ff1e01;
@@ -708,9 +707,7 @@
             -webkit-appearance: none;
             margin: 0;
           }
-          input[type="number"] {
-            -moz-appearance: textfield;
-          }
+          input[type="number"] { -moz-appearance: textfield; }
         `;
         document.head.appendChild(style);
 
@@ -757,13 +754,9 @@
         premiumInput.addEventListener('blur', () => premiumInput.style.borderColor = '#ccc');
         premiumInput.addEventListener('input', function() {
           let val = parseInt(this.value, 10);
-          if (!isNaN(val) && val < 1) {
-            this.value = '';
-          } else if (isNaN(val) && this.value !== '') {
-            this.value = '';
-          } else if (this.value !== '' && !Number.isInteger(val)) {
-            this.value = Math.floor(val);
-          }
+          if (!isNaN(val) && val < 1) this.value = '';
+          else if (isNaN(val) && this.value !== '') this.value = '';
+          else if (this.value !== '' && !Number.isInteger(val)) this.value = Math.floor(val);
         });
         premiumInput.value = "";
         premiumPanel.appendChild(premiumInput);
@@ -781,13 +774,9 @@
         basicInput.addEventListener('blur', () => basicInput.style.borderColor = '#ccc');
         basicInput.addEventListener('input', function() {
           let val = parseInt(this.value, 10);
-          if (!isNaN(val) && val < 1) {
-            this.value = '';
-          } else if (isNaN(val) && this.value !== '') {
-            this.value = '';
-          } else if (this.value !== '' && !Number.isInteger(val)) {
-            this.value = Math.floor(val);
-          }
+          if (!isNaN(val) && val < 1) this.value = '';
+          else if (isNaN(val) && this.value !== '') this.value = '';
+          else if (this.value !== '' && !Number.isInteger(val)) this.value = Math.floor(val);
         });
         basicInput.value = "";
         basicPanel.appendChild(basicInput);
@@ -859,7 +848,7 @@
       bar("Готово");
     };
 
-    // --- Обработка обычной строки ---
+    // --- Обработка строки (для всех, кроме исходников) ---
     function processNormalRow(row, nameBlock) {
       const tds = row.querySelectorAll('td');
       if (tds.length < 6) return;
@@ -868,17 +857,13 @@
       const { hasPromo } = detectPromo(tds);
       const sum = (tds[5].innerText || "").trim();
       const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
-      row.style.removeProperty('background');
-      row.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
-      row.style.setProperty('box-shadow', 'none', 'important');
-      row.style.setProperty('border-top', 'none', 'important');
-      row.style.setProperty('border-right', 'none', 'important');
-      row.style.setProperty('border-bottom', 'none', 'important');
 
-      nameBlock.style.display = "flex";
-      nameBlock.style.alignItems = "center";
-      nameBlock.style.gap = "6px";
-      if (nameBlock.querySelector(".promo-tool-checkbox")) return;
+      const firstTd = tds[0];
+      firstTd.style.borderLeft = `3px solid ${borderColor}`;
+      firstTd.style.paddingLeft = '12px';
+
+      const { checkboxCol } = wrapCellForCheckbox(firstTd);
+      if (checkboxCol.querySelector('.promo-tool-checkbox')) return;
 
       const cb = document.createElement("input");
       cb.type = "checkbox";
@@ -887,14 +872,17 @@
       cb.dataset.name = name;
       cb.dataset.sum = sum;
       cb.dataset.promo = hasPromo ? "1" : "0";
-      nameBlock.prepend(cb);
+      checkboxCol.appendChild(cb);
 
       if (cb.checked) getOrCreateIndividualInput(nameBlock);
       createExtraWrapper(nameBlock);
 
       cb.addEventListener('change', function(e) {
-        const nameBlockLocal = this.closest('.order-products-table-name');
+        const tr = this.closest('tr');
+        if (!tr) return;
+        const nameBlockLocal = tr.querySelector('.order-products-table-name') || tr.querySelector('.subrow-name-field');
         if (!nameBlockLocal) return;
+
         const wrapper = createExtraWrapper(nameBlockLocal);
         if (this.checked) {
           if (wrapper) {
@@ -912,80 +900,13 @@
             if (total) total.remove();
           }
         }
-        resetAllCalculationsOnCheckboxChange();
+        recalcSummary();
       });
     }
 
-    // --- Обработка пары (замена+исходник) ---
-    function processReplacementPair(subrowRow, originalRow) {
-      const subrowTds = subrowRow.querySelectorAll('td');
-      if (subrowTds.length < 6) return;
-      const subrowNameBlock = subrowRow.querySelector('.subrow-name-field');
-      if (!subrowNameBlock) return;
-      const originalNameBlock = originalRow.querySelector('.order-products-table-name.row-has-subrows');
-      if (!originalNameBlock) return;
+    // Запуск
+    init();
 
-      const name = subrowNameBlock.textContent.trim();
-      if (!name || name.toLowerCase().includes("пакет")) return;
-
-      const { hasPromo } = detectPromo(subrowTds);
-      const sum = (subrowTds[5].innerText || "").trim();
-      const borderColor = hasPromo ? '#69db7e' : '#ffb3b3';
-
-      [subrowRow, originalRow].forEach(row => {
-        row.style.removeProperty('background');
-        row.style.setProperty('border-left', `3px solid ${borderColor}`, 'important');
-        row.style.setProperty('box-shadow', 'none', 'important');
-        row.style.setProperty('border-top', 'none', 'important');
-        row.style.setProperty('border-right', 'none', 'important');
-        row.style.setProperty('border-bottom', 'none', 'important');
-      });
-
-      subrowNameBlock.style.display = "flex";
-      subrowNameBlock.style.alignItems = "center";
-      subrowNameBlock.style.gap = "6px";
-      if (subrowNameBlock.querySelector(".promo-tool-checkbox")) return;
-
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.className = "promo-tool-checkbox";
-      cb.checked = !hasPromo;
-      cb.dataset.name = name;
-      cb.dataset.sum = sum;
-      cb.dataset.promo = hasPromo ? "1" : "0";
-      const origId = originalRow.dataset.rowId || (originalRow.dataset.rowId = 'orig_' + Math.random());
-      cb.dataset.originalRowId = origId;
-      cb.dataset.subrowRowId = subrowRow.dataset.rowId || (subrowRow.dataset.rowId = 'sub_' + Math.random());
-      subrowNameBlock.prepend(cb);
-
-      if (cb.checked) getOrCreateIndividualInput(subrowNameBlock);
-      createExtraWrapper(subrowNameBlock);
-
-      cb.addEventListener('change', function(e) {
-        const nameBlockLocal = this.closest('.subrow-name-field');
-        if (!nameBlockLocal) return;
-        const wrapper = createExtraWrapper(nameBlockLocal);
-        if (this.checked) {
-          if (wrapper) {
-            getOrCreateIndividualInput(nameBlockLocal);
-            const container = wrapper.querySelector('.promo-pills-container');
-            if (container) container.innerHTML = '';
-          }
-        } else {
-          if (wrapper) {
-            const inputDiv = wrapper.querySelector('.promo-tool-individual-input');
-            if (inputDiv) inputDiv.remove();
-            const container = wrapper.querySelector('.promo-pills-container');
-            if (container) container.innerHTML = '';
-            const total = wrapper.querySelector('.promo-pill-total');
-            if (total) total.remove();
-          }
-        }
-        resetAllCalculationsOnCheckboxChange();
-      });
-    }
-
-    // --- Подписка на изменение корзины ---
     const setupCartChangeListener = () => {
       const input = document.querySelector('input[name="cartType"]');
       if (input) {
@@ -994,32 +915,21 @@
           if (oldWrap) oldWrap.remove();
           removeAllPills();
           resetSummaryPanelToWaiting();
-          currentCart = detectCartType();
-          init();
+          scheduleInit(400);
         });
       }
     };
-
-    // --- Запуск ---
-    init();
     setupCartChangeListener();
 
     const observer = new MutationObserver(() => {
-      if (document.querySelector("tr[class^='_table-row_']") && !document.getElementById("promo-tool-calc-wrap")) {
-        const newCart = detectCartType();
-        if (newCart !== currentCart) {
-          currentCart = newCart;
-          removeAllPills();
-          resetSummaryPanelToWaiting();
-        }
-        init();
+      if (document.querySelector("tr[class^='_table-row_']") && !document.getElementById("promo-tool-calc-wrap") && !initTimeout) {
+        scheduleInit(200);
       }
     });
     observer.observe(document.body, { childList: true, subtree: true });
     setTimeout(() => observer.disconnect(), 30000);
   };
 
-  // ----- IFRAME -----
   const iframe = document.getElementById("frame-page-order");
   if (iframe && iframe.src) {
     const url = iframe.src + (iframe.src.includes("?") ? "&" : "?") + "autocheck=1";
