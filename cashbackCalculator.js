@@ -329,7 +329,7 @@
     };
 
     const restoreState = () => {
-      const saved = sessionStorage.getItem('сashbackCalculatorState_' + window.location.pathname);
+      const saved = sessionStorage.getItem('cashbackCalculatorState_' + window.location.pathname);
       if (!saved) return;
       try {
         const state = JSON.parse(saved);
@@ -544,13 +544,15 @@
         }
 
         let commonValue = 0, brandValue = 0, individualValue = 0;
-        if (!hasPromo) {
-          if (commonPercentage !== 0) commonValue = sumVal * commonPercentage / 100;
-          if (activeTab === 'premium') {
-            const title = nameBlock.textContent.trim();
-            const brandName = getBrandName(title);
-            if (brandName) brandValue = sumVal * 20 / 100;
-          }
+        // Для Премиум общий процент применяется ко всем товарам (с промокодом и без)
+        if (commonPercentage !== 0 && (activeTab === 'premium' || !hasPromo)) {
+          commonValue = sumVal * commonPercentage / 100;
+        }
+        // Брендовый кешбэк по-прежнему только для товаров без промокода
+        if (activeTab === 'premium' && !hasPromo) {
+          const title = nameBlock.textContent.trim();
+          const brandName = getBrandName(title);
+          if (brandName) brandValue = sumVal * 20 / 100;
         }
         if (wrapper) {
           const indInput = wrapper.querySelector('.promo-tool-individual-input input');
@@ -566,21 +568,20 @@
         let delay = 0;
         createTotalPillWithAnimation(totalFormatted, nameBlock, delay);
         delay += 50;
-        if (!hasPromo) {
-          if (commonPercentage !== 0) {
-            const formatted = commonValue.toFixed(2);
-            const label = activeTab === 'premium' ? 'Премиум' : 'Базовый';
-            if (container) createPillWithAnimation(`${formatted} ${label}`, 'common', container, delay);
+
+        if (commonPercentage !== 0 && (activeTab === 'premium' || !hasPromo)) {
+          const formatted = commonValue.toFixed(2);
+          const label = activeTab === 'premium' ? 'Премиум' : 'Базовый';
+          if (container) createPillWithAnimation(`${formatted} ${label}`, 'common', container, delay);
+          delay += 50;
+        }
+        if (activeTab === 'premium' && !hasPromo) {
+          const title = nameBlock.textContent.trim();
+          const brandName = getBrandName(title);
+          if (brandName) {
+            const formatted = brandValue.toFixed(2);
+            if (container) createPillWithAnimation(`${formatted} за ${brandName}`, 'brand', container, delay);
             delay += 50;
-          }
-          if (activeTab === 'premium') {
-            const title = nameBlock.textContent.trim();
-            const brandName = getBrandName(title);
-            if (brandName) {
-              const formatted = brandValue.toFixed(2);
-              if (container) createPillWithAnimation(`${formatted} за ${brandName}`, 'brand', container, delay);
-              delay += 50;
-            }
           }
         }
         if (individualValue > 0) {
@@ -639,7 +640,7 @@
           const firstTd = tds[0];
           firstTd.style.borderLeft = `3px solid ${borderColor}`;
           firstTd.style.paddingLeft = '12px';
-          wrapCellForCheckbox(firstTd); // пустая колонка для выравнивания
+          wrapCellForCheckbox(firstTd);
           continue;
         }
 
@@ -820,6 +821,7 @@
         wrap.appendChild(controlsRow);
         wrap.appendChild(helpPanel);
 
+        // Функция переключения вкладок управляет чекбоксами
         const switchTab = (active) => {
           activeTab = active;
           if (active === 'premium') {
@@ -835,6 +837,26 @@
           }
           removeAllPills();
           resetSummaryPanelToWaiting();
+
+          // Управление чекбоксами в зависимости от вкладки
+          document.querySelectorAll('.promo-tool-checkbox').forEach(cb => {
+            if (active === 'premium') {
+              if (!cb.checked) {
+                cb.checked = true;
+                cb.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            } else { // basic
+              const hasPromo = cb.dataset.promo === '1';
+              if (hasPromo && cb.checked) {
+                cb.checked = false;
+                cb.dispatchEvent(new Event('change', { bubbles: true }));
+              } else if (!hasPromo && !cb.checked) {
+                cb.checked = true;
+                cb.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            }
+          });
+
           saveState();
         };
         premiumTab.onclick = () => switchTab('premium');
@@ -868,7 +890,8 @@
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.className = "promo-tool-checkbox";
-      cb.checked = !hasPromo;
+      // ВАЖНОЕ ИЗМЕНЕНИЕ: при активной вкладке Премиум выделяем все товары
+      cb.checked = (activeTab === 'premium') ? true : !hasPromo;
       cb.dataset.name = name;
       cb.dataset.sum = sum;
       cb.dataset.promo = hasPromo ? "1" : "0";
